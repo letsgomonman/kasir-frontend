@@ -269,7 +269,7 @@ export default function POSPage() {
           <div className="p-5 border-b border-slate-100">
             <div className="flex items-center gap-2 mb-1">
               <Store className="text-blue-600" size={24} />
-              <span className="font-bold text-lg text-slate-900">Kasir Universal</span>
+              <span className="font-bold text-lg text-slate-900">Kasir</span>
             </div>
             <div className="bg-blue-50 border border-blue-100 p-2.5 rounded-lg mt-3">
               <p className="text-xs text-slate-500 font-medium">Usaha Aktif:</p>

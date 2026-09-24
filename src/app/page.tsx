@@ -42,7 +42,7 @@ export default function LandingAndAuthPage() {
       <header className="bg-white border-b border-slate-200 px-8 py-4 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <Store className="text-blue-600" size={28} />
-          <span className="text-xl font-bold text-slate-900">Kasir Universal</span>
+          <span className="text-xl font-bold text-slate-900">Kasir</span>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -66,7 +66,7 @@ export default function LandingAndAuthPage() {
           Solusi Aplikasi Kasir Multi-Usaha
         </span>
         <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 leading-tight mb-6">
-          Kelola Semua Jenis Usahamu dalam <span className="text-blue-600">Satu Akun Universal</span>
+          Kelola Semua Jenis Usahamu dalam <span className="text-blue-600">Satu Akun</span>
         </h1>
         <p className="text-lg text-slate-600 max-w-2xl mb-8">
           Platform Point of Sale (POS) modern yang memungkinkan pemilik bisnis mengelola inventaris, catatan kasir, dan ringkasan transaksi untuk berbagai toko sekaligus.
@@ -109,7 +109,7 @@ export default function LandingAndAuthPage() {
               ✕
             </button>
             <h2 className="text-2xl font-bold text-center text-slate-900 mb-2">
-              Kasir Universal
+              Kasir
             </h2>
             <p className="text-sm text-center text-slate-600 mb-6">
               {isLogin ? 'Masuk ke akun Anda' : 'Daftar akun baru'}
