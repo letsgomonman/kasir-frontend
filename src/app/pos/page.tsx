@@ -16,7 +16,8 @@ import {
   Box,
   CreditCard,
   Printer,
-  CheckCircle2
+  CheckCircle2,
+  AlertTriangle
 } from 'lucide-react';
 
 interface Product {
@@ -214,14 +215,21 @@ export default function POSPage() {
     setStok(0);
   };
 
+  // Helper untuk mendapatkan sisa stok riil (stok DB - jumlah di keranjang)
+  const getAvailableStock = (product: Product) => {
+    const cartItem = cart.find((item) => item.product_id === product.id);
+    const inCartQty = cartItem ? cartItem.jumlah : 0;
+    return product.stok - inCartQty;
+  };
+
   const addToCart = (product: Product) => {
-    if (product.stok <= 0) return alert('Stok produk ini telah habis!');
+    const availableStock = getAvailableStock(product);
+    if (availableStock <= 0) {
+      return alert('Sisa stok produk ini tidak mencukupi untuk ditambah lagi!');
+    }
 
     const existing = cart.find((item) => item.product_id === product.id);
     if (existing) {
-      if (existing.jumlah >= product.stok) {
-        return alert(`Jumlah melebihi batas stok ketersediaan (${product.stok})!`);
-      }
       setCart(
         cart.map((item) =>
           item.product_id === product.id
@@ -351,7 +359,7 @@ export default function POSPage() {
           <div className="p-5 border-b border-slate-100">
             <div className="flex items-center gap-2 mb-1">
               <Store className="text-blue-600" size={24} />
-              <span className="font-bold text-lg text-slate-900">Kasir</span>
+              <span className="font-bold text-lg text-slate-900">Kasir Universal</span>
             </div>
             <div className="bg-blue-50 border border-blue-100 p-2.5 rounded-lg mt-3">
               <p className="text-xs text-slate-500 font-medium">Usaha Aktif:</p>
@@ -431,7 +439,10 @@ export default function POSPage() {
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 overflow-y-auto max-h-[calc(100vh-140px)]">
                 {filteredProducts.map((prod) => {
-                  const isOutOfStock = prod.stok <= 0;
+                  const availableStock = getAvailableStock(prod);
+                  const isOutOfStock = availableStock <= 0;
+                  const isLowStock = availableStock > 0 && availableStock <= 5;
+
                   return (
                     <div
                       key={prod.id}
@@ -439,11 +450,20 @@ export default function POSPage() {
                       className={`p-3 border rounded-lg transition flex flex-col justify-between bg-white relative ${
                         isOutOfStock
                           ? 'opacity-50 border-slate-200 cursor-not-allowed bg-slate-50'
+                          : isLowStock
+                          ? 'border-amber-300 hover:border-amber-500 cursor-pointer bg-amber-50/20'
                           : 'border-slate-200 hover:border-blue-500 cursor-pointer'
                       }`}
                     >
                       <div>
-                        <h3 className="font-medium text-slate-900 text-sm">{prod.nama_produk}</h3>
+                        <div className="flex justify-between items-start gap-1">
+                          <h3 className="font-medium text-slate-900 text-sm line-clamp-1">{prod.nama_produk}</h3>
+                          {isLowStock && (
+                            <span title="Stok Menipis" className="text-amber-600 shrink-0">
+                              <AlertTriangle size={14} />
+                            </span>
+                          )}
+                        </div>
                         <span className="text-xs text-slate-500">{prod.kategori || 'Umum'}</span>
                       </div>
                       <div className="mt-3 flex justify-between items-center">
@@ -454,10 +474,16 @@ export default function POSPage() {
                           className={`text-xs px-2 py-0.5 rounded font-medium ${
                             isOutOfStock
                               ? 'bg-red-100 text-red-700 font-bold'
+                              : isLowStock
+                              ? 'bg-amber-100 text-amber-800 font-bold'
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
-                          {isOutOfStock ? 'Stok Habis' : `Stok: ${prod.stok}`}
+                          {isOutOfStock
+                            ? 'Habis'
+                            : isLowStock
+                            ? `Sisa: ${availableStock}`
+                            : `Stok: ${availableStock}`}
                         </span>
                       </div>
                     </div>
@@ -473,47 +499,56 @@ export default function POSPage() {
                   <ShoppingCart size={18} /> Keranjang Kasir
                 </h2>
                 <div className="space-y-3 max-h-[calc(100vh-320px)] overflow-y-auto">
-                  {cart.map((item) => (
-                    <div key={item.product_id} className="border-b border-slate-100 pb-2 space-y-1">
-                      <div className="flex justify-between items-start">
-                        <p className="font-medium text-slate-900 text-sm">{item.nama_produk}</p>
-                        <button
-                          onClick={() => removeAllItemFromCart(item.product_id)}
-                          aria-label={`Hapus ${item.nama_produk} dari keranjang`}
-                          title="Hapus Semua"
-                          className="text-slate-400 hover:text-red-600 p-0.5"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+                  {cart.map((item) => {
+                    const prod = products.find((p) => p.id === item.product_id);
+                    const isMaxStockReached = prod ? item.jumlah >= prod.stok : false;
 
-                      <div className="flex justify-between items-center text-xs">
-                        <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1">
+                    return (
+                      <div key={item.product_id} className="border-b border-slate-100 pb-2 space-y-1">
+                        <div className="flex justify-between items-start">
+                          <p className="font-medium text-slate-900 text-sm">{item.nama_produk}</p>
                           <button
-                            onClick={() => decreaseQuantity(item.product_id)}
-                            className="p-1 hover:bg-white rounded text-slate-700 transition"
-                            title="Kurangi 1"
+                            onClick={() => removeAllItemFromCart(item.product_id)}
+                            aria-label={`Hapus ${item.nama_produk} dari keranjang`}
+                            title="Hapus Semua"
+                            className="text-slate-400 hover:text-red-600 p-0.5"
                           >
-                            <Minus size={12} />
-                          </button>
-                          <span className="font-bold px-1 text-slate-900">{item.jumlah}</span>
-                          <button
-                            onClick={() => {
-                              const prod = products.find((p) => p.id === item.product_id);
-                              if (prod) addToCart(prod);
-                            }}
-                            className="p-1 hover:bg-white rounded text-slate-700 transition"
-                            title="Tambah 1"
-                          >
-                            <Plus size={12} />
+                            <Trash2 size={14} />
                           </button>
                         </div>
-                        <span className="font-bold text-slate-900">
-                          Rp {item.subtotal.toLocaleString('id-ID')}
-                        </span>
+
+                        <div className="flex justify-between items-center text-xs">
+                          <div className="flex items-center gap-2 bg-slate-100 rounded-md p-1">
+                            <button
+                              onClick={() => decreaseQuantity(item.product_id)}
+                              className="p-1 hover:bg-white rounded text-slate-700 transition"
+                              title="Kurangi 1"
+                            >
+                              <Minus size={12} />
+                            </button>
+                            <span className="font-bold px-1 text-slate-900">{item.jumlah}</span>
+                            <button
+                              disabled={isMaxStockReached}
+                              onClick={() => {
+                                if (prod) addToCart(prod);
+                              }}
+                              className={`p-1 rounded transition ${
+                                isMaxStockReached
+                                  ? 'text-slate-300 cursor-not-allowed'
+                                  : 'text-slate-700 hover:bg-white'
+                              }`}
+                              title={isMaxStockReached ? 'Stok Maksimal Tercapai' : 'Tambah 1'}
+                            >
+                              <Plus size={12} />
+                            </button>
+                          </div>
+                          <span className="font-bold text-slate-900">
+                            Rp {item.subtotal.toLocaleString('id-ID')}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -576,38 +611,50 @@ export default function POSPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {products.map((prod) => (
-                      <tr key={prod.id} className="hover:bg-slate-50">
-                        <td className="p-3 font-semibold text-slate-900">{prod.nama_produk}</td>
-                        <td className="p-3">{prod.kategori || 'Umum'}</td>
-                        <td className="p-3 font-semibold text-blue-600">Rp {prod.harga.toLocaleString('id-ID')}</td>
-                        <td className="p-3">
-                          <span
-                            className={`px-2.5 py-1 rounded-md font-medium text-xs ${
-                              prod.stok <= 0
-                                ? 'bg-red-100 text-red-700 font-bold'
-                                : 'bg-slate-100 text-slate-800'
-                            }`}
-                          >
-                            {prod.stok <= 0 ? 'Stok Habis (0)' : prod.stok}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right space-x-2">
-                          <button
-                            onClick={() => openEditModal(prod)}
-                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition inline-flex items-center gap-1 text-xs font-semibold"
-                          >
-                            <Pencil size={14} /> Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteProduct(prod.id)}
-                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition inline-flex items-center gap-1 text-xs font-semibold"
-                          >
-                            <Trash2 size={14} /> Hapus
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {products.map((prod) => {
+                      const isLowStock = prod.stok > 0 && prod.stok <= 5;
+                      const isOutOfStock = prod.stok <= 0;
+
+                      return (
+                        <tr key={prod.id} className="hover:bg-slate-50">
+                          <td className="p-3 font-semibold text-slate-900">{prod.nama_produk}</td>
+                          <td className="p-3">{prod.kategori || 'Umum'}</td>
+                          <td className="p-3 font-semibold text-blue-600">Rp {prod.harga.toLocaleString('id-ID')}</td>
+                          <td className="p-3">
+                            <span
+                              className={`px-2.5 py-1 rounded-md font-medium text-xs inline-flex items-center gap-1 ${
+                                isOutOfStock
+                                  ? 'bg-red-100 text-red-700 font-bold'
+                                  : isLowStock
+                                  ? 'bg-amber-100 text-amber-800 font-bold'
+                                  : 'bg-slate-100 text-slate-800'
+                              }`}
+                            >
+                              {isLowStock && <AlertTriangle size={12} />}
+                              {isOutOfStock
+                                ? 'Stok Habis (0)'
+                                : isLowStock
+                                ? `Stok Menipis (${prod.stok})`
+                                : prod.stok}
+                            </span>
+                          </td>
+                          <td className="p-3 text-right space-x-2">
+                            <button
+                              onClick={() => openEditModal(prod)}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition inline-flex items-center gap-1 text-xs font-semibold"
+                            >
+                              <Pencil size={14} /> Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteProduct(prod.id)}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition inline-flex items-center gap-1 text-xs font-semibold"
+                            >
+                              <Trash2 size={14} /> Hapus
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
