@@ -17,7 +17,9 @@ import {
   CreditCard,
   Printer,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Banknote,
+  QrCode
 } from 'lucide-react';
 
 interface Product {
@@ -67,6 +69,7 @@ interface CompletedReceipt {
   totalHarga: number;
   bayar: number;
   kembalian: number;
+  metodePembayaran: string;
 }
 
 function useLocalStorage<T>(key: string): T | null {
@@ -92,6 +95,7 @@ export default function POSPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [bayar, setBayar] = useState<number>(0);
+  const [metodePembayaran, setMetodePembayaran] = useState<'Tunai' | 'QRIS / Non-Tunai'>('Tunai');
   const [searchQuery, setSearchQuery] = useState('');
 
   const [activeTab, setActiveTab] = useState<'pos' | 'products' | 'dashboard'>('pos');
@@ -215,7 +219,6 @@ export default function POSPage() {
     setStok(0);
   };
 
-  // Helper untuk mendapatkan sisa stok riil (stok DB - jumlah di keranjang)
   const getAvailableStock = (product: Product) => {
     const cartItem = cart.find((item) => item.product_id === product.id);
     const inCartQty = cartItem ? cartItem.jumlah : 0;
@@ -276,6 +279,13 @@ export default function POSPage() {
   const totalHarga = cart.reduce((acc, item) => acc + item.subtotal, 0);
   const kembalian = bayar >= totalHarga ? bayar - totalHarga : 0;
 
+  const handleSelectPaymentMethod = (method: 'Tunai' | 'QRIS / Non-Tunai') => {
+    setMetodePembayaran(method);
+    if (method === 'QRIS / Non-Tunai') {
+      setBayar(totalHarga);
+    }
+  };
+
   const handleCheckout = async () => {
     if (!activeStore) return;
     if (cart.length === 0) return alert('Keranjang masih kosong!');
@@ -287,6 +297,7 @@ export default function POSPage() {
         total_harga: totalHarga,
         bayar,
         kembalian,
+        metode_pembayaran: metodePembayaran,
         items: cart,
       });
 
@@ -300,11 +311,13 @@ export default function POSPage() {
         totalHarga,
         bayar,
         kembalian,
+        metodePembayaran,
       });
 
       setShowReceiptModal(true);
       setCart([]);
       setBayar(0);
+      setMetodePembayaran('Tunai');
       fetchProducts(activeStore.id);
       fetchDashboardData(activeStore.id);
     } catch {
@@ -328,7 +341,6 @@ export default function POSPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex text-slate-900">
-      {/* CSS KHUSUS PRINT UKURAN STRUK THERMAL 80MM */}
       <style jsx global>{`
         @media print {
           @page {
@@ -498,7 +510,7 @@ export default function POSPage() {
                 <h2 className="font-bold text-slate-900 mb-4 flex items-center gap-2 text-base">
                   <ShoppingCart size={18} /> Keranjang Kasir
                 </h2>
-                <div className="space-y-3 max-h-[calc(100vh-320px)] overflow-y-auto">
+                <div className="space-y-3 max-h-[calc(100vh-420px)] overflow-y-auto">
                   {cart.map((item) => {
                     const prod = products.find((p) => p.id === item.product_id);
                     const isMaxStockReached = prod ? item.jumlah >= prod.stok : false;
@@ -552,25 +564,82 @@ export default function POSPage() {
                 </div>
               </div>
 
-              <div className="border-t border-slate-200 pt-4 space-y-3">
+              <div className="border-t border-slate-200 pt-3 space-y-2.5">
+                {/* PILIHAN METODE PEMBAYARAN */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Metode Pembayaran</label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPaymentMethod('Tunai')}
+                      className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
+                        metodePembayaran === 'Tunai'
+                          ? 'bg-blue-50 text-blue-700 border-blue-500'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Banknote size={14} /> Tunai
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectPaymentMethod('QRIS / Non-Tunai')}
+                      className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-bold border transition ${
+                        metodePembayaran === 'QRIS / Non-Tunai'
+                          ? 'bg-blue-50 text-blue-700 border-blue-500'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <QrCode size={14} /> QRIS / Digital
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex justify-between text-base font-bold">
                   <span className="text-slate-900">Total:</span>
                   <span className="text-blue-600">Rp {totalHarga.toLocaleString('id-ID')}</span>
                 </div>
+
                 <div>
                   <label className="text-xs font-semibold text-slate-700 block mb-1">Jumlah Bayar (Rp)</label>
                   <input
                     type="number"
+                    readOnly={metodePembayaran === 'QRIS / Non-Tunai'}
                     value={bayar || ''}
                     onChange={(e) => setBayar(Number(e.target.value))}
-                    className="w-full p-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 bg-white font-semibold"
+                    className={`w-full p-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 font-semibold ${
+                      metodePembayaran === 'QRIS / Non-Tunai' ? 'bg-slate-100' : 'bg-white'
+                    }`}
                     placeholder="0"
                   />
+                  {/* TOMBOL PINTAS UANG PAS (KHUSUS CASH) */}
+                  {metodePembayaran === 'Tunai' && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setBayar(totalHarga)}
+                        className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700 rounded transition"
+                      >
+                        Uang Pas
+                      </button>
+                      {[10000, 20000, 50000, 100000].map((nominal) => (
+                        <button
+                          key={nominal}
+                          type="button"
+                          onClick={() => setBayar(nominal)}
+                          className="text-[10px] font-semibold px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition"
+                        >
+                          {nominal / 1000}rb
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
+
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-600">Kembalian:</span>
                   <span className="font-semibold text-slate-900">Rp {kembalian.toLocaleString('id-ID')}</span>
                 </div>
+
                 <button
                   onClick={handleCheckout}
                   className="w-full bg-green-600 text-white py-2.5 rounded-lg font-bold hover:bg-green-700 transition"
@@ -786,7 +855,6 @@ export default function POSPage() {
       {showReceiptModal && receipt && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:static print:block">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-slate-900 shadow-2xl border border-slate-200 print:w-full print:p-0 print:border-none print:shadow-none">
-            {/* Header Sukses (Disembunyikan saat cetak) */}
             <div className="text-center mb-4 print:hidden">
               <div className="inline-flex p-3 bg-green-100 text-green-600 rounded-full mb-2">
                 <CheckCircle2 size={32} />
@@ -831,6 +899,10 @@ export default function POSPage() {
 
               {/* Rincian Pembayaran */}
               <div className="space-y-1 text-xs">
+                <div className="flex justify-between text-slate-600">
+                  <span>METODE</span>
+                  <span className="font-semibold text-slate-900">{receipt.metodePembayaran}</span>
+                </div>
                 <div className="flex justify-between font-bold text-sm text-slate-900 pt-1">
                   <span>TOTAL</span>
                   <span>Rp {receipt.totalHarga.toLocaleString('id-ID')}</span>
@@ -850,7 +922,6 @@ export default function POSPage() {
               </div>
             </div>
 
-            {/* Tombol Aksi (Disembunyikan saat cetak) */}
             <div className="mt-6 flex gap-2 print:hidden">
               <button
                 onClick={handlePrint}
