@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import API from '@/lib/api';
 import {
@@ -14,7 +14,9 @@ import {
   Store,
   RefreshCw,
   Box,
-  CreditCard
+  CreditCard,
+  Printer,
+  CheckCircle2
 } from 'lucide-react';
 
 interface Product {
@@ -37,6 +39,8 @@ interface CartItem {
 interface ActiveStore {
   id: string;
   nama_toko: string;
+  alamat?: string;
+  no_telepon?: string;
 }
 
 interface TransactionSummary {
@@ -52,7 +56,38 @@ interface TransactionRecord {
   created_at: string;
 }
 
+interface CompletedReceipt {
+  transactionId?: string;
+  createdAt: Date;
+  storeName: string;
+  storeAddress?: string;
+  storePhone?: string;
+  items: CartItem[];
+  totalHarga: number;
+  bayar: number;
+  kembalian: number;
+}
+
+function useLocalStorage<T>(key: string): T | null {
+  const store = useSyncExternalStore(
+    (callback) => {
+      window.addEventListener('storage', callback);
+      return () => window.removeEventListener('storage', callback);
+    },
+    () => localStorage.getItem(key),
+    () => null
+  );
+
+  if (!store) return null;
+  try {
+    return JSON.parse(store) as T;
+  } catch {
+    return null;
+  }
+}
+
 export default function POSPage() {
+  const activeStore = useLocalStorage<ActiveStore>('activeStore');
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [bayar, setBayar] = useState<number>(0);
@@ -62,6 +97,7 @@ export default function POSPage() {
   const [summary, setSummary] = useState<TransactionSummary>({ totalOmzet: 0, totalTransaksi: 0 });
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
 
+  // State untuk modal Tambah/Edit Produk
   const [showProductModal, setShowProductModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [namaProduk, setNamaProduk] = useState('');
@@ -69,19 +105,11 @@ export default function POSPage() {
   const [harga, setHarga] = useState(0);
   const [stok, setStok] = useState(0);
 
-  const router = useRouter();
+  // State untuk Modal Struk Penjualan
+  const [receipt, setReceipt] = useState<CompletedReceipt | null>(null);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
 
-  // Lazy Initial State dari localStorage
-  const [activeStore] = useState<ActiveStore | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const storeData = localStorage.getItem('activeStore');
-    if (!storeData) return null;
-    try {
-      return JSON.parse(storeData);
-    } catch {
-      return null;
-    }
-  });
+  const router = useRouter();
 
   const fetchProducts = useCallback(async (storeId: string) => {
     try {
@@ -103,12 +131,15 @@ export default function POSPage() {
   }, []);
 
   useEffect(() => {
-    if (!activeStore) {
-      router.replace('/stores');
-      return;
+    if (activeStore === null) {
+      const timer = setTimeout(() => {
+        if (!localStorage.getItem('activeStore')) {
+          router.replace('/stores');
+        }
+      }, 100);
+      return () => clearTimeout(timer);
     }
 
-    // Dibungkus dengan timer untuk menghindari synchronous setState di Effect
     const timer = setTimeout(() => {
       fetchProducts(activeStore.id);
       fetchDashboardData(activeStore.id);
@@ -153,6 +184,15 @@ export default function POSPage() {
     } catch {
       alert('Gagal menghapus produk');
     }
+  };
+
+  const openAddModal = () => {
+    setEditingProduct(null);
+    setNamaProduk('');
+    setKategori('');
+    setHarga(0);
+    setStok(0);
+    setShowProductModal(true);
   };
 
   const openEditModal = (product: Product, e?: React.MouseEvent) => {
@@ -234,14 +274,27 @@ export default function POSPage() {
     if (bayar < totalHarga) return alert('Uang pembayaran kurang!');
 
     try {
-      await API.post('/transactions', {
+      const { data } = await API.post('/transactions', {
         store_id: activeStore.id,
         total_harga: totalHarga,
         bayar,
         kembalian,
         items: cart,
       });
-      alert('Transaksi Berhasil!');
+
+      setReceipt({
+        transactionId: data?.transaction?.id,
+        createdAt: new Date(),
+        storeName: activeStore.nama_toko,
+        storeAddress: activeStore.alamat,
+        storePhone: activeStore.no_telepon,
+        items: [...cart],
+        totalHarga,
+        bayar,
+        kembalian,
+      });
+
+      setShowReceiptModal(true);
       setCart([]);
       setBayar(0);
       fetchProducts(activeStore.id);
@@ -249,6 +302,10 @@ export default function POSPage() {
     } catch {
       alert('Transaksi Gagal disimpan');
     }
+  };
+
+  const handlePrint = () => {
+    window.print();
   };
 
   const handleLogout = () => {
@@ -263,8 +320,33 @@ export default function POSPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex text-slate-900">
+      {/* CSS KHUSUS PRINT UKURAN STRUK THERMAL 80MM */}
+      <style jsx global>{`
+        @media print {
+          @page {
+            size: 80mm auto;
+            margin: 0;
+          }
+          body {
+            background-color: #fff !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 80mm !important;
+          }
+          .receipt-print-area {
+            width: 78mm !important;
+            margin: 0 auto !important;
+            padding: 4mm 2mm !important;
+            box-shadow: none !important;
+            border: none !important;
+            border-radius: 0 !important;
+            font-size: 11px !important;
+          }
+        }
+      `}</style>
+
       {/* SIDEBAR NAVIGATION */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 h-screen sticky top-0">
+      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 h-screen sticky top-0 print:hidden">
         <div>
           <div className="p-5 border-b border-slate-100">
             <div className="flex items-center gap-2 mb-1">
@@ -273,7 +355,7 @@ export default function POSPage() {
             </div>
             <div className="bg-blue-50 border border-blue-100 p-2.5 rounded-lg mt-3">
               <p className="text-xs text-slate-500 font-medium">Usaha Aktif:</p>
-              <p className="font-bold text-slate-900 text-sm truncate">{activeStore?.nama_toko}</p>
+              <p className="font-bold text-slate-900 text-sm truncate">{activeStore?.nama_toko || '...'}</p>
             </div>
           </div>
 
@@ -328,7 +410,7 @@ export default function POSPage() {
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-hidden print:hidden">
         {/* TAB 1: KASIR (POS) */}
         {activeTab === 'pos' && (
           <div className="h-screen flex p-4 gap-4 overflow-hidden">
@@ -474,7 +556,7 @@ export default function POSPage() {
                 <p className="text-sm text-slate-500">Kelola daftar barang dan pembaruan inventaris toko</p>
               </div>
               <button
-                onClick={() => closeProductModal()}
+                onClick={openAddModal}
                 className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 transition"
               >
                 <Plus size={18} /> Tambah Produk
@@ -587,7 +669,7 @@ export default function POSPage() {
 
       {/* Modal Tambah / Edit Produk */}
       {showProductModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 print:hidden">
           <div className="bg-white rounded-xl p-6 w-full max-w-md text-slate-900">
             <h3 className="text-lg font-bold mb-4 text-slate-900">
               {editingProduct ? 'Edit Produk' : 'Tambah Produk Baru'}
@@ -649,6 +731,93 @@ export default function POSPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL STRUK SELESAI BAYAR */}
+      {showReceiptModal && receipt && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:static print:block">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-slate-900 shadow-2xl border border-slate-200 print:w-full print:p-0 print:border-none print:shadow-none">
+            {/* Header Sukses (Disembunyikan saat cetak) */}
+            <div className="text-center mb-4 print:hidden">
+              <div className="inline-flex p-3 bg-green-100 text-green-600 rounded-full mb-2">
+                <CheckCircle2 size={32} />
+              </div>
+              <h3 className="text-xl font-extrabold text-slate-900">Pembayaran Berhasil!</h3>
+              <p className="text-xs text-slate-500">Bukti transaksi resmi telah diterbitkan</p>
+            </div>
+
+            {/* AREA STRUK NOTA PENJUALAN THERMAL */}
+            <div className="receipt-print-area border border-dashed border-slate-300 p-4 rounded-xl bg-slate-50 font-mono text-xs text-slate-800 print:bg-white print:border-none print:p-0">
+              <div className="text-center pb-3 border-b border-dashed border-slate-300 mb-3">
+                <h4 className="font-bold text-sm uppercase tracking-wide text-slate-900">{receipt.storeName}</h4>
+                {receipt.storeAddress && <p className="text-[10px] text-slate-600">{receipt.storeAddress}</p>}
+                {receipt.storePhone && <p className="text-[10px] text-slate-600">Telp: {receipt.storePhone}</p>}
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {receipt.createdAt.toLocaleString('id-ID', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  })}
+                </p>
+                {receipt.transactionId && (
+                  <p className="text-[9px] text-slate-400 font-mono truncate">ID: {receipt.transactionId}</p>
+                )}
+              </div>
+
+              {/* Rincian Barang */}
+              <div className="space-y-2 border-b border-dashed border-slate-300 pb-3 mb-3">
+                {receipt.items.map((item) => (
+                  <div key={item.product_id} className="flex justify-between items-start">
+                    <div>
+                      <p className="font-bold text-slate-900">{item.nama_produk}</p>
+                      <p className="text-[10px] text-slate-500">
+                        {item.jumlah} x Rp {item.harga_satuan.toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                    <span className="font-bold text-slate-900">
+                      Rp {item.subtotal.toLocaleString('id-ID')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Rincian Pembayaran */}
+              <div className="space-y-1 text-xs">
+                <div className="flex justify-between font-bold text-sm text-slate-900 pt-1">
+                  <span>TOTAL</span>
+                  <span>Rp {receipt.totalHarga.toLocaleString('id-ID')}</span>
+                </div>
+                <div className="flex justify-between text-slate-600 pt-1">
+                  <span>BAYAR</span>
+                  <span>Rp {receipt.bayar.toLocaleString('id-ID')}</span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>KEMBALIAN</span>
+                  <span>Rp {receipt.kembalian.toLocaleString('id-ID')}</span>
+                </div>
+              </div>
+
+              <div className="text-center mt-4 pt-3 border-t border-dashed border-slate-300 text-[10px] text-slate-500">
+                Terima kasih atas kunjungan Anda!
+              </div>
+            </div>
+
+            {/* Tombol Aksi (Disembunyikan saat cetak) */}
+            <div className="mt-6 flex gap-2 print:hidden">
+              <button
+                onClick={handlePrint}
+                className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white py-2.5 rounded-xl font-bold text-sm hover:bg-blue-700 transition"
+              >
+                <Printer size={16} /> Cetak / Simpan PDF
+              </button>
+              <button
+                onClick={() => setShowReceiptModal(false)}
+                className="px-4 py-2.5 border border-slate-300 text-slate-700 rounded-xl font-semibold text-sm hover:bg-slate-100 transition"
+              >
+                Tutup
+              </button>
+            </div>
           </div>
         </div>
       )}

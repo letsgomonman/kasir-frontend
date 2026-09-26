@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import API from '@/lib/api';
 import { Store, Plus, LogOut, Trash2 } from 'lucide-react';
@@ -16,25 +16,33 @@ interface User {
   email: string;
 }
 
+// Helper resmi React untuk membaca localStorage tanpa Hydration Mismatch & tanpa useEffect setState
+function useLocalStorage<T>(key: string): T | null {
+  const store = useSyncExternalStore(
+    (callback) => {
+      window.addEventListener('storage', callback);
+      return () => window.removeEventListener('storage', callback);
+    },
+    () => localStorage.getItem(key),
+    () => null
+  );
+
+  if (!store) return null;
+  try {
+    return JSON.parse(store) as T;
+  } catch {
+    return null;
+  }
+}
+
 export default function StoresPage() {
+  const user = useLocalStorage<User>('user');
   const [stores, setStores] = useState<StoreItem[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [namaToko, setNamaToko] = useState('');
   const [alamat, setAlamat] = useState('');
   const [noTelepon, setNoTelepon] = useState('');
   const router = useRouter();
-
-  // Lazy Initial State dari localStorage
-  const [user] = useState<User | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const userData = localStorage.getItem('user');
-    if (!userData) return null;
-    try {
-      return JSON.parse(userData);
-    } catch {
-      return null;
-    }
-  });
 
   const fetchStores = useCallback(async (userId: string) => {
     try {
@@ -46,12 +54,15 @@ export default function StoresPage() {
   }, []);
 
   useEffect(() => {
-    if (!user) {
-      router.replace('/');
-      return;
+    if (user === null) {
+      const timer = setTimeout(() => {
+        if (!localStorage.getItem('user')) {
+          router.replace('/');
+        }
+      }, 100);
+      return () => clearTimeout(timer);
     }
 
-    // Dibungkus dengan Async IIFE di dalam timer untuk menghindari synchronous render di Effect
     const timer = setTimeout(() => {
       fetchStores(user.id);
     }, 0);
@@ -107,7 +118,7 @@ export default function StoresPage() {
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Pilih Profil Usaha</h1>
-            <p className="text-slate-600 text-sm">Kelola beberapa toko dalam satu akun ({user?.email})</p>
+            <p className="text-slate-600 text-sm">Kelola beberapa toko dalam satu akun ({user?.email || '...'})</p>
           </div>
           <button
             onClick={handleLogout}
