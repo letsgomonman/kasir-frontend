@@ -19,7 +19,10 @@ import {
   CheckCircle2,
   AlertTriangle,
   Banknote,
-  QrCode
+  QrCode,
+  Eye,
+  Calendar,
+  X
 } from 'lucide-react';
 
 interface Product {
@@ -56,6 +59,7 @@ interface TransactionRecord {
   total_harga: number;
   bayar: number;
   kembalian: number;
+  metode_pembayaran?: string;
   created_at: string;
 }
 
@@ -70,6 +74,15 @@ interface CompletedReceipt {
   bayar: number;
   kembalian: number;
   metodePembayaran: string;
+}
+
+interface TransactionDetailItem {
+  id: string;
+  product_id?: string;
+  nama_produk: string;
+  jumlah: number;
+  harga_satuan: number;
+  subtotal: number;
 }
 
 function useLocalStorage<T>(key: string): T | null {
@@ -101,8 +114,9 @@ export default function POSPage() {
   const [activeTab, setActiveTab] = useState<'pos' | 'products' | 'dashboard'>('pos');
   const [summary, setSummary] = useState<TransactionSummary>({ totalOmzet: 0, totalTransaksi: 0 });
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week'>('all');
 
-  // State untuk modal Tambah/Edit Produk
+  // Modal Tambah/Edit Produk
   const [showProductModal, setShowProductModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [namaProduk, setNamaProduk] = useState('');
@@ -110,9 +124,14 @@ export default function POSPage() {
   const [harga, setHarga] = useState(0);
   const [stok, setStok] = useState(0);
 
-  // State untuk Modal Struk Penjualan
+  // Modal Struk Selesai Bayar / Cetak Ulang
   const [receipt, setReceipt] = useState<CompletedReceipt | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
+
+  // Modal Detail Riwayat Transaksi
+  const [selectedTx, setSelectedTx] = useState<TransactionRecord | null>(null);
+  const [txDetails, setTxDetails] = useState<TransactionDetailItem[]>([]);
+  const [showTxDetailModal, setShowTxDetailModal] = useState(false);
 
   const router = useRouter();
 
@@ -325,6 +344,63 @@ export default function POSPage() {
     }
   };
 
+  // Buka Modal Detail Transaksi saat baris diklik
+  const handleViewTxDetail = async (tx: TransactionRecord) => {
+    setSelectedTx(tx);
+    try {
+      const { data } = await API.get<TransactionDetailItem[]>(`/transactions/${tx.id}/items`);
+      setTxDetails(data);
+      setShowTxDetailModal(true);
+    } catch {
+      alert('Gagal mengambil detail transaksi');
+    }
+  };
+
+  // Ekspor / Cetak Ulang Struk dari Riwayat Transaksi
+  const handleRePrintFromHistory = () => {
+    if (!selectedTx || !activeStore) return;
+
+    const mappedItems: CartItem[] = txDetails.map((item) => ({
+      product_id: item.product_id || item.id,
+      nama_produk: item.nama_produk,
+      jumlah: item.jumlah,
+      harga_satuan: item.harga_satuan,
+      subtotal: item.subtotal,
+      max_stok: item.jumlah,
+    }));
+
+    setReceipt({
+      transactionId: selectedTx.id,
+      createdAt: new Date(selectedTx.created_at),
+      storeName: activeStore.nama_toko,
+      storeAddress: activeStore.alamat,
+      storePhone: activeStore.no_telepon,
+      items: mappedItems,
+      totalHarga: Number(selectedTx.total_harga),
+      bayar: Number(selectedTx.bayar),
+      kembalian: Number(selectedTx.kembalian),
+      metodePembayaran: selectedTx.metode_pembayaran || 'Tunai',
+    });
+
+    setShowTxDetailModal(false);
+    setShowReceiptModal(true);
+  };
+
+  // Hapus Transaksi
+  const handleDeleteTx = async (txId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!activeStore || !confirm('Yakin ingin menghapus transaksi ini? Stok barang akan dikembalikan otomatis.')) return;
+
+    try {
+      await API.delete(`/transactions/${txId}`);
+      fetchProducts(activeStore.id);
+      fetchDashboardData(activeStore.id);
+      if (showTxDetailModal) setShowTxDetailModal(false);
+    } catch {
+      alert('Gagal menghapus transaksi');
+    }
+  };
+
   const handlePrint = () => {
     window.print();
   };
@@ -338,6 +414,20 @@ export default function POSPage() {
   const filteredProducts = products.filter((p) =>
     p.nama_produk.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const filteredTransactions = transactions.filter((tx) => {
+    const txDate = new Date(tx.created_at);
+    const now = new Date();
+
+    if (dateFilter === 'today') {
+      return txDate.toDateString() === now.toDateString();
+    } else if (dateFilter === 'week') {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(now.getDate() - 7);
+      return txDate >= sevenDaysAgo;
+    }
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-slate-100 flex text-slate-900">
@@ -565,7 +655,6 @@ export default function POSPage() {
               </div>
 
               <div className="border-t border-slate-200 pt-3 space-y-2.5">
-                {/* PILIHAN METODE PEMBAYARAN */}
                 <div>
                   <label className="text-xs font-semibold text-slate-700 block mb-1">Metode Pembayaran</label>
                   <div className="grid grid-cols-2 gap-1.5">
@@ -611,7 +700,6 @@ export default function POSPage() {
                     }`}
                     placeholder="0"
                   />
-                  {/* TOMBOL PINTAS UANG PAS (KHUSUS CASH) */}
                   {metodePembayaran === 'Tunai' && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       <button
@@ -734,9 +822,40 @@ export default function POSPage() {
         {/* TAB 3: RINGKASAN TRANSAKSI */}
         {activeTab === 'dashboard' && (
           <div className="p-6 max-w-5xl mx-auto w-full space-y-6">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">Ringkasan Penjualan</h2>
-              <p className="text-sm text-slate-500">Laporan omzet dan riwayat transaksi usaha ini</p>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900">Ringkasan Penjualan</h2>
+                <p className="text-sm text-slate-500">Laporan omzet dan riwayat transaksi usaha ini</p>
+              </div>
+
+              {/* FILTER TANGGAL */}
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 p-1 rounded-xl text-xs font-semibold">
+                <Calendar size={14} className="text-slate-400 ml-2" />
+                <button
+                  onClick={() => setDateFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg transition ${
+                    dateFilter === 'all' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Semua
+                </button>
+                <button
+                  onClick={() => setDateFilter('today')}
+                  className={`px-3 py-1.5 rounded-lg transition ${
+                    dateFilter === 'today' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Hari Ini
+                </button>
+                <button
+                  onClick={() => setDateFilter('week')}
+                  className={`px-3 py-1.5 rounded-lg transition ${
+                    dateFilter === 'week' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  7 Hari Terakhir
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -761,18 +880,55 @@ export default function POSPage() {
                   <thead className="bg-slate-50 text-slate-500 border-b">
                     <tr>
                       <th className="p-3">Tanggal / Waktu</th>
+                      <th className="p-3">Metode</th>
                       <th className="p-3">Total Transaksi</th>
                       <th className="p-3">Bayar</th>
                       <th className="p-3">Kembalian</th>
+                      <th className="p-3 text-right">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {transactions.map((tx) => (
-                      <tr key={tx.id} className="hover:bg-slate-50">
+                    {filteredTransactions.map((tx) => (
+                      <tr
+                        key={tx.id}
+                        onClick={() => handleViewTxDetail(tx)}
+                        className="hover:bg-slate-50 cursor-pointer transition"
+                      >
                         <td className="p-3">{new Date(tx.created_at).toLocaleString('id-ID')}</td>
-                        <td className="p-3 font-semibold text-slate-900">Rp {Number(tx.total_harga).toLocaleString('id-ID')}</td>
+                        <td className="p-3 font-medium">
+                          <span
+                            className={`px-2 py-0.5 rounded text-xs font-bold ${
+                              tx.metode_pembayaran === 'QRIS / Non-Tunai'
+                                ? 'bg-purple-100 text-purple-700'
+                                : 'bg-green-100 text-green-700'
+                            }`}
+                          >
+                            {tx.metode_pembayaran || 'Tunai'}
+                          </span>
+                        </td>
+                        <td className="p-3 font-semibold text-slate-900">
+                          Rp {Number(tx.total_harga).toLocaleString('id-ID')}
+                        </td>
                         <td className="p-3">Rp {Number(tx.bayar).toLocaleString('id-ID')}</td>
                         <td className="p-3">Rp {Number(tx.kembalian).toLocaleString('id-ID')}</td>
+                        <td className="p-3 text-right space-x-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleViewTxDetail(tx);
+                            }}
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg inline-flex items-center gap-1 text-xs font-semibold"
+                          >
+                            <Eye size={14} /> Rincian
+                          </button>
+                          <button
+                            onClick={(e) => handleDeleteTx(tx.id, e)}
+                            title="Hapus Transaksi"
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg inline-flex items-center text-xs"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -782,6 +938,78 @@ export default function POSPage() {
           </div>
         )}
       </main>
+
+      {/* MODAL RINCIAN ITEM TRANSAKSI & CETAK ULANG */}
+      {showTxDetailModal && selectedTx && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 print:hidden">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md text-slate-900 shadow-2xl">
+            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Rincian Item Transaksi</h3>
+                <p className="text-xs text-slate-500">
+                  {new Date(selectedTx.created_at).toLocaleString('id-ID')}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowTxDetailModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-60 overflow-y-auto mb-4 border-b border-slate-100 pb-3">
+              {txDetails.map((item) => (
+                <div key={item.id} className="flex justify-between items-center text-sm">
+                  <div>
+                    <p className="font-semibold text-slate-900">{item.nama_produk}</p>
+                    <p className="text-xs text-slate-500">
+                      {item.jumlah} x Rp {Number(item.harga_satuan).toLocaleString('id-ID')}
+                    </p>
+                  </div>
+                  <span className="font-bold text-slate-900">
+                    Rp {Number(item.subtotal).toLocaleString('id-ID')}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-1.5 text-xs">
+              <div className="flex justify-between text-slate-600">
+                <span>Metode Pembayaran</span>
+                <span className="font-bold text-slate-900">{selectedTx.metode_pembayaran || 'Tunai'}</span>
+              </div>
+              <div className="flex justify-between font-bold text-sm text-slate-900 pt-1">
+                <span>Total Belanja</span>
+                <span className="text-blue-600">Rp {Number(selectedTx.total_harga).toLocaleString('id-ID')}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Jumlah Bayar</span>
+                <span>Rp {Number(selectedTx.bayar).toLocaleString('id-ID')}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Kembalian</span>
+                <span>Rp {Number(selectedTx.kembalian).toLocaleString('id-ID')}</span>
+              </div>
+            </div>
+
+            <div className="mt-6 flex gap-2">
+              <button
+                onClick={handleRePrintFromHistory}
+                className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white py-2.5 rounded-xl font-bold text-sm hover:bg-blue-700 transition"
+              >
+                <Printer size={16} /> Cetak / Simpan PDF Struk
+              </button>
+              <button
+                onClick={() => setShowTxDetailModal(false)}
+                className="px-4 py-2.5 border border-slate-300 text-slate-700 rounded-xl font-semibold text-sm hover:bg-slate-100 transition"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Tambah / Edit Produk */}
       {showProductModal && (
@@ -851,7 +1079,7 @@ export default function POSPage() {
         </div>
       )}
 
-      {/* MODAL STRUK SELESAI BAYAR */}
+      {/* MODAL STRUK SELESAI BAYAR & CETAK ULANG */}
       {showReceiptModal && receipt && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:static print:block">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-slate-900 shadow-2xl border border-slate-200 print:w-full print:p-0 print:border-none print:shadow-none">
@@ -859,11 +1087,10 @@ export default function POSPage() {
               <div className="inline-flex p-3 bg-green-100 text-green-600 rounded-full mb-2">
                 <CheckCircle2 size={32} />
               </div>
-              <h3 className="text-xl font-extrabold text-slate-900">Pembayaran Berhasil!</h3>
-              <p className="text-xs text-slate-500">Bukti transaksi resmi telah diterbitkan</p>
+              <h3 className="text-xl font-extrabold text-slate-900">Struk Transaksi</h3>
+              <p className="text-xs text-slate-500">Bukti transaksi resmi</p>
             </div>
 
-            {/* AREA STRUK NOTA PENJUALAN THERMAL */}
             <div className="receipt-print-area border border-dashed border-slate-300 p-4 rounded-xl bg-slate-50 font-mono text-xs text-slate-800 print:bg-white print:border-none print:p-0">
               <div className="text-center pb-3 border-b border-dashed border-slate-300 mb-3">
                 <h4 className="font-bold text-sm uppercase tracking-wide text-slate-900">{receipt.storeName}</h4>
@@ -880,7 +1107,6 @@ export default function POSPage() {
                 )}
               </div>
 
-              {/* Rincian Barang */}
               <div className="space-y-2 border-b border-dashed border-slate-300 pb-3 mb-3">
                 {receipt.items.map((item) => (
                   <div key={item.product_id} className="flex justify-between items-start">
@@ -897,7 +1123,6 @@ export default function POSPage() {
                 ))}
               </div>
 
-              {/* Rincian Pembayaran */}
               <div className="space-y-1 text-xs">
                 <div className="flex justify-between text-slate-600">
                   <span>METODE</span>

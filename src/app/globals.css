@@ -24,3 +24,26 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Styling Khusus Struk Thermal 80mm Saat Dicetak */
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+  body {
+    background-color: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 80mm !important;
+  }
+  .receipt-print-area {
+    width: 78mm !important;
+    margin: 0 auto !important;
+    padding: 4mm 2mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    font-size: 11px !important;
+  }
+}
