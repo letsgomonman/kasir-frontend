@@ -3,6 +3,15 @@ import { useEffect, useState, useCallback, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import API from '@/lib/api';
 import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from 'recharts';
+import {
   ShoppingCart,
   Plus,
   Minus,
@@ -26,7 +35,9 @@ import {
   FileSpreadsheet,
   UserCheck,
   Tag,
-  Receipt
+  Receipt,
+  TrendingUp,
+  Flame,
 } from 'lucide-react';
 
 interface Product {
@@ -77,6 +88,20 @@ interface DebtRecord {
   nama_pelanggan: string;
   sisa_hutang: number;
   created_at: string;
+}
+
+interface SalesTrendItem {
+  date: string;
+  formattedDate: string;
+  omzet: number;
+}
+
+interface TopProductItem {
+  product_id: string;
+  nama_produk: string;
+  kategori: string;
+  total_terjual: number;
+  total_pendapatan: number;
 }
 
 interface CompletedReceipt {
@@ -142,9 +167,15 @@ export default function POSPage() {
   const [selectedDebt, setSelectedDebt] = useState<DebtRecord | null>(null);
   const [jumlahBayarKasbon, setJumlahBayarKasbon] = useState<number>(0);
 
+  // State Analitik Grafik & Top Products
+  const [salesTrend, setSalesTrend] = useState<SalesTrendItem[]>([]);
+  const [topProducts, setTopProducts] = useState<TopProductItem[]>([]);
+  const [trendRange, setTrendRange] = useState<'7days' | '30days'>('7days');
+
   // State UX Loading
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(true);
 
   const [activeTab, setActiveTab] = useState<'pos' | 'products' | 'dashboard'>('pos');
   const [summary, setSummary] = useState<TransactionSummary>({ totalOmzet: 0, totalTransaksi: 0 });
@@ -204,6 +235,21 @@ export default function POSPage() {
     }
   }, []);
 
+  const fetchAnalyticsData = useCallback(async (storeId: string, range: string) => {
+    try {
+      const [trendRes, topRes] = await Promise.all([
+        API.get<SalesTrendItem[]>(`/analytics/sales-trend/${storeId}?range=${range}`),
+        API.get<TopProductItem[]>(`/analytics/top-products/${storeId}`),
+      ]);
+      setSalesTrend(trendRes.data);
+      setTopProducts(topRes.data);
+    } catch (err) {
+      console.error('Gagal memuat data analitik:', err);
+    } finally {
+      setLoadingAnalytics(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeStore === null) {
       const timer = setTimeout(() => {
@@ -222,6 +268,16 @@ export default function POSPage() {
 
     return () => clearTimeout(timer);
   }, [activeStore, router, fetchProducts, fetchDashboardData, fetchDebts]);
+
+  useEffect(() => {
+    if (activeStore && activeTab === 'dashboard') {
+      const timer = setTimeout(() => {
+        setLoadingAnalytics(true);
+        fetchAnalyticsData(activeStore.id, trendRange);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [activeStore, activeTab, trendRange, fetchAnalyticsData]);
 
   const confirmNavigationWithCart = (): boolean => {
     if (cart.length > 0) {
@@ -645,7 +701,7 @@ export default function POSPage() {
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 overflow-hidden print:hidden">
+      <main className="flex-1 overflow-hidden print:hidden overflow-y-auto">
         {/* TAB 1: KASIR (POS) */}
         {activeTab === 'pos' && (
           <div className="h-screen flex p-4 gap-4 overflow-hidden">
@@ -889,7 +945,7 @@ export default function POSPage() {
                     </div>
                   )}
                   {diskon > 0 && (
-                    <div className="flex justify-between text-xs text-red-600 font-semibold">
+                    <div className="flex justify-between text-red-600 font-semibold">
                       <span>Diskon:</span>
                       <span>- Rp {diskon.toLocaleString('id-ID')}</span>
                     </div>
@@ -1052,13 +1108,13 @@ export default function POSPage() {
           </div>
         )}
 
-        {/* TAB 3: RINGKASAN TRANSAKSI */}
+        {/* TAB 3: RINGKASAN TRANSAKSI & ANALITIK GRAFIK */}
         {activeTab === 'dashboard' && (
           <div className="p-6 max-w-5xl mx-auto w-full space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div>
                 <h2 className="text-2xl font-bold text-slate-900">Ringkasan Penjualan</h2>
-                <p className="text-sm text-slate-500">Laporan omzet dan riwayat transaksi usaha ini</p>
+                <p className="text-sm text-slate-500">Laporan omzet dan analitik transaksi usaha ini</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
@@ -1081,7 +1137,7 @@ export default function POSPage() {
                   <FileSpreadsheet size={15} /> Export Excel (.xlsx)
                 </button>
 
-                {/* FILTER TANGGAL */}
+                {/* FILTER TANGGAL RIWAYAT */}
                 <div className="flex items-center gap-1.5 bg-white border border-slate-200 p-1 rounded-xl text-xs font-semibold">
                   <Calendar size={14} className="text-slate-400 ml-2" />
                   <button
@@ -1112,6 +1168,7 @@ export default function POSPage() {
               </div>
             </div>
 
+            {/* CARD RINGKASAN OMZET */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Omzet Penjualan</p>
@@ -1127,6 +1184,117 @@ export default function POSPage() {
               </div>
             </div>
 
+            {/* SECTION ANALITIK VISUAL (GRAFIK & TOP PRODUCTS) */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* GRAFIK TREN OMZET */}
+              <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                      <TrendingUp className="text-blue-600" size={18} /> Grafik Tren Omzet
+                    </h3>
+                    <p className="text-xs text-slate-500">Pergerakan pendapatan harian toko</p>
+                  </div>
+
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                    <button
+                      onClick={() => setTrendRange('7days')}
+                      className={`px-3 py-1 rounded-lg transition ${
+                        trendRange === '7days' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600'
+                      }`}
+                    >
+                      7 Hari
+                    </button>
+                    <button
+                      onClick={() => setTrendRange('30days')}
+                      className={`px-3 py-1 rounded-lg transition ${
+                        trendRange === '30days' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600'
+                      }`}
+                    >
+                      30 Hari
+                    </button>
+                  </div>
+                </div>
+
+                <div className="h-64 w-full pt-4">
+                  {loadingAnalytics ? (
+                    <div className="h-full w-full bg-slate-50 rounded-xl animate-pulse flex items-center justify-center text-xs text-slate-400">
+                      Memuat Grafik...
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={salesTrend}>
+                        <defs>
+                          <linearGradient id="colorOmzet" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.3} />
+                            <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="formattedDate" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fontSize: 11, fill: '#64748b' }}
+                          tickFormatter={(val) => `Rp${val / 1000}k`}
+                        />
+                        <Tooltip
+                          formatter={(value) => [`Rp ${Number(value || 0).toLocaleString('id-ID')}`, 'Omzet']}
+                          labelFormatter={(label) => `Tanggal: ${label}`}
+                          contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', fontSize: '12px' }}
+                        />
+                        <Area type="monotone" dataKey="omzet" stroke="#2563eb" strokeWidth={3} fillOpacity={1} fill="url(#colorOmzet)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
+
+              {/* DAFTAR PRODUK TERLARIS (TOP SELLING) */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between space-y-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Flame className="text-amber-500" size={20} />
+                    <h3 className="font-bold text-slate-900 text-base">Top 5 Produk Terlaris</h3>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-4">Produk paling banyak dibeli pelanggan</p>
+
+                  {loadingAnalytics ? (
+                    <div className="space-y-3">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="h-10 bg-slate-100 rounded-xl animate-pulse" />
+                      ))}
+                    </div>
+                  ) : topProducts.length === 0 ? (
+                    <div className="text-center py-10 text-slate-400 text-xs">Belum ada data penjualan produk.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {topProducts.map((item, index) => (
+                        <div key={item.product_id} className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-slate-50/50">
+                          <div className="flex items-center gap-3">
+                            <span className={`w-6 h-6 rounded-lg font-bold text-xs flex items-center justify-center ${
+                              index === 0 ? 'bg-amber-100 text-amber-700' : index === 1 ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {index + 1}
+                            </span>
+                            <div>
+                              <p className="font-bold text-slate-900 text-xs line-clamp-1">{item.nama_produk}</p>
+                              <p className="text-[10px] text-slate-500">{item.kategori || 'Umum'}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="font-bold text-blue-600 text-xs block">{item.total_terjual} pcs</span>
+                            <span className="text-[10px] text-slate-400">Rp {item.total_pendapatan.toLocaleString('id-ID')}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* TABEL RIWAYAT TRANSAKSI */}
             <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
               <h3 className="font-bold text-slate-900 mb-4">Riwayat Transaksi Penjualan</h3>
               <div className="overflow-x-auto">
