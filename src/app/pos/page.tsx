@@ -22,7 +22,11 @@ import {
   QrCode,
   Eye,
   Calendar,
-  X
+  X,
+  FileSpreadsheet,
+  UserCheck,
+  Tag,
+  Receipt
 } from 'lucide-react';
 
 interface Product {
@@ -57,9 +61,21 @@ interface TransactionSummary {
 interface TransactionRecord {
   id: string;
   total_harga: number;
+  diskon?: number;
   bayar: number;
   kembalian: number;
   metode_pembayaran?: string;
+  nama_pelanggan?: string;
+  status_pembayaran?: string;
+  created_at: string;
+}
+
+interface DebtRecord {
+  id: string;
+  store_id: string;
+  transaction_id?: string;
+  nama_pelanggan: string;
+  sisa_hutang: number;
   created_at: string;
 }
 
@@ -70,10 +86,14 @@ interface CompletedReceipt {
   storeAddress?: string;
   storePhone?: string;
   items: CartItem[];
+  subtotalBelanja: number;
+  diskon: number;
   totalHarga: number;
   bayar: number;
   kembalian: number;
   metodePembayaran: string;
+  namaPelanggan?: string;
+  statusPembayaran?: string;
 }
 
 interface TransactionDetailItem {
@@ -111,7 +131,18 @@ export default function POSPage() {
   const [metodePembayaran, setMetodePembayaran] = useState<'Tunai' | 'QRIS / Non-Tunai'>('Tunai');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // State untuk UX Loading
+  // State Fitur Diskon & Kasbon
+  const [diskon, setDiskon] = useState<number>(0);
+  const [namaPelanggan, setNamaPelanggan] = useState<string>('');
+  const [isKasbon, setIsKasbon] = useState<boolean>(false);
+
+  // State Kelola & Pelunasan Kasbon
+  const [debts, setDebts] = useState<DebtRecord[]>([]);
+  const [showDebtModal, setShowDebtModal] = useState(false);
+  const [selectedDebt, setSelectedDebt] = useState<DebtRecord | null>(null);
+  const [jumlahBayarKasbon, setJumlahBayarKasbon] = useState<number>(0);
+
+  // State UX Loading
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
 
@@ -128,11 +159,11 @@ export default function POSPage() {
   const [harga, setHarga] = useState(0);
   const [stok, setStok] = useState(0);
 
-  // Modal Struk Selesai Bayar / Cetak Ulang
+  // Modal Struk Penjualan
   const [receipt, setReceipt] = useState<CompletedReceipt | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
 
-  // Modal Detail Riwayat Transaksi
+  // Modal Detail Transaksi
   const [selectedTx, setSelectedTx] = useState<TransactionRecord | null>(null);
   const [txDetails, setTxDetails] = useState<TransactionDetailItem[]>([]);
   const [showTxDetailModal, setShowTxDetailModal] = useState(false);
@@ -164,6 +195,15 @@ export default function POSPage() {
     }
   }, []);
 
+  const fetchDebts = useCallback(async (storeId: string) => {
+    try {
+      const { data } = await API.get<DebtRecord[]>(`/debts/store/${storeId}`);
+      setDebts(data);
+    } catch (error) {
+      console.error('Gagal mengambil data kasbon', error);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeStore === null) {
       const timer = setTimeout(() => {
@@ -177,12 +217,12 @@ export default function POSPage() {
     const timer = setTimeout(() => {
       fetchProducts(activeStore.id);
       fetchDashboardData(activeStore.id);
+      fetchDebts(activeStore.id);
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [activeStore, router, fetchProducts, fetchDashboardData]);
+  }, [activeStore, router, fetchProducts, fetchDashboardData, fetchDebts]);
 
-  // Keamanan Akses: Peringatan jika meninggalkan halaman saat keranjang tidak kosong
   const confirmNavigationWithCart = (): boolean => {
     if (cart.length > 0) {
       return confirm('Masih ada item di dalam keranjang belanja. Apakah Anda yakin ingin keluar?');
@@ -208,6 +248,9 @@ export default function POSPage() {
     if (cart.length > 0 && confirm('Apakah Anda yakin ingin mengosongkan keranjang?')) {
       setCart([]);
       setBayar(0);
+      setDiskon(0);
+      setNamaPelanggan('');
+      setIsKasbon(false);
     }
   };
 
@@ -334,7 +377,9 @@ export default function POSPage() {
     setCart(cart.filter((item) => item.product_id !== productId));
   };
 
-  const totalHarga = cart.reduce((acc, item) => acc + item.subtotal, 0);
+  // Kalkulasi Total Belanja
+  const subtotalBelanja = cart.reduce((acc, item) => acc + item.subtotal, 0);
+  const totalHarga = Math.max(0, subtotalBelanja - diskon);
   const kembalian = bayar >= totalHarga ? bayar - totalHarga : 0;
 
   const handleSelectPaymentMethod = (method: 'Tunai' | 'QRIS / Non-Tunai') => {
@@ -347,15 +392,20 @@ export default function POSPage() {
   const handleCheckout = async () => {
     if (!activeStore) return;
     if (cart.length === 0) return alert('Keranjang masih kosong!');
-    if (bayar < totalHarga) return alert('Uang pembayaran kurang!');
+    if (!isKasbon && bayar < totalHarga) return alert('Uang pembayaran kurang!');
+    if (isKasbon && !namaPelanggan.trim()) return alert('Nama Pelanggan wajib diisi untuk transaksi Kasbon/Hutang!');
 
     try {
+      const statusPembayaran = isKasbon ? 'Belum Lunas' : 'Lunas';
       const { data } = await API.post('/transactions', {
         store_id: activeStore.id,
         total_harga: totalHarga,
+        diskon,
         bayar,
-        kembalian,
+        kembalian: isKasbon ? 0 : kembalian,
         metode_pembayaran: metodePembayaran,
+        nama_pelanggan: namaPelanggan.trim() || 'Umum',
+        status_pembayaran: statusPembayaran,
         items: cart,
       });
 
@@ -366,20 +416,51 @@ export default function POSPage() {
         storeAddress: activeStore.alamat,
         storePhone: activeStore.no_telepon,
         items: [...cart],
+        subtotalBelanja,
+        diskon,
         totalHarga,
         bayar,
-        kembalian,
+        kembalian: isKasbon ? 0 : kembalian,
         metodePembayaran,
+        namaPelanggan: namaPelanggan.trim() || 'Umum',
+        statusPembayaran,
       });
 
       setShowReceiptModal(true);
       setCart([]);
       setBayar(0);
+      setDiskon(0);
+      setNamaPelanggan('');
+      setIsKasbon(false);
       setMetodePembayaran('Tunai');
       fetchProducts(activeStore.id);
       fetchDashboardData(activeStore.id);
+      fetchDebts(activeStore.id);
     } catch {
       alert('Transaksi Gagal disimpan');
+    }
+  };
+
+  // Fungsi Pelunasan Kasbon
+  const handlePayDebt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDebt || jumlahBayarKasbon <= 0) return;
+
+    try {
+      await API.post(`/debts/${selectedDebt.id}/pay`, {
+        jumlah_bayar: jumlahBayarKasbon,
+      });
+      alert('Pembayaran kasbon berhasil dicatat!');
+      setSelectedDebt(null);
+      setJumlahBayarKasbon(0);
+
+      if (activeStore) {
+        fetchProducts(activeStore.id);
+        fetchDashboardData(activeStore.id);
+        fetchDebts(activeStore.id);
+      }
+    } catch {
+      alert('Gagal memproses pembayaran kasbon');
     }
   };
 
@@ -406,6 +487,9 @@ export default function POSPage() {
       max_stok: item.jumlah,
     }));
 
+    const txDiskon = Number(selectedTx.diskon || 0);
+    const txTotal = Number(selectedTx.total_harga);
+
     setReceipt({
       transactionId: selectedTx.id,
       createdAt: new Date(selectedTx.created_at),
@@ -413,10 +497,14 @@ export default function POSPage() {
       storeAddress: activeStore.alamat,
       storePhone: activeStore.no_telepon,
       items: mappedItems,
-      totalHarga: Number(selectedTx.total_harga),
+      subtotalBelanja: txTotal + txDiskon,
+      diskon: txDiskon,
+      totalHarga: txTotal,
       bayar: Number(selectedTx.bayar),
       kembalian: Number(selectedTx.kembalian),
       metodePembayaran: selectedTx.metode_pembayaran || 'Tunai',
+      namaPelanggan: selectedTx.nama_pelanggan || 'Umum',
+      statusPembayaran: selectedTx.status_pembayaran || 'Lunas',
     });
 
     setShowTxDetailModal(false);
@@ -431,10 +519,17 @@ export default function POSPage() {
       await API.delete(`/transactions/${txId}`);
       fetchProducts(activeStore.id);
       fetchDashboardData(activeStore.id);
+      fetchDebts(activeStore.id);
       if (showTxDetailModal) setShowTxDetailModal(false);
     } catch {
       alert('Gagal menghapus transaksi');
     }
+  };
+
+  const handleExportExcel = () => {
+    if (!activeStore) return;
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+    window.open(`${apiUrl}/transactions/export/excel/${activeStore.id}`, '_blank');
   };
 
   const handlePrint = () => {
@@ -491,7 +586,7 @@ export default function POSPage() {
           <div className="p-5 border-b border-slate-100">
             <div className="flex items-center gap-2 mb-1">
               <Store className="text-blue-600" size={24} />
-              <span className="font-bold text-lg text-slate-900">Kasir Universal</span>
+              <span className="font-bold text-lg text-slate-900">Kasir</span>
             </div>
             <div className="bg-blue-50 border border-blue-100 p-2.5 rounded-lg mt-3">
               <p className="text-xs text-slate-500 font-medium">Usaha Aktif:</p>
@@ -569,7 +664,6 @@ export default function POSPage() {
                 </div>
               </div>
 
-              {/* SKELETON LOADING PRODUK */}
               {loadingProducts ? (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -643,7 +737,7 @@ export default function POSPage() {
             {/* Keranjang Kasir */}
             <div className="w-80 bg-white p-4 rounded-xl border border-slate-200 flex flex-col justify-between shrink-0">
               <div>
-                <div className="flex justify-between items-center mb-4">
+                <div className="flex justify-between items-center mb-3">
                   <h2 className="font-bold text-slate-900 flex items-center gap-2 text-base">
                     <ShoppingCart size={18} /> Keranjang Kasir
                   </h2>
@@ -657,7 +751,7 @@ export default function POSPage() {
                   )}
                 </div>
 
-                <div className="space-y-3 max-h-[calc(100vh-420px)] overflow-y-auto">
+                <div className="space-y-3 max-h-[calc(100vh-480px)] overflow-y-auto">
                   {cart.length === 0 ? (
                     <div className="text-center py-8 text-slate-400 text-xs">
                       <ShoppingCart size={32} className="mx-auto mb-2 opacity-30" />
@@ -718,7 +812,47 @@ export default function POSPage() {
                 </div>
               </div>
 
-              <div className="border-t border-slate-200 pt-3 space-y-2.5">
+              <div className="border-t border-slate-200 pt-3 space-y-2 text-xs">
+                {/* FITUR DISKON & KASBON */}
+                <div className="space-y-1.5 bg-slate-50 p-2 rounded-lg border border-slate-200">
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1 mb-0.5">
+                        <Tag size={10} /> Diskon (Rp)
+                      </label>
+                      <input
+                        type="number"
+                        value={diskon || ''}
+                        onChange={(e) => setDiskon(Number(e.target.value))}
+                        className="w-full p-1.5 border border-slate-300 rounded bg-white font-semibold text-slate-900 outline-none focus:ring-1 focus:ring-blue-500"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1 mb-0.5">
+                        <UserCheck size={10} /> Pelanggan
+                      </label>
+                      <input
+                        type="text"
+                        value={namaPelanggan}
+                        onChange={(e) => setNamaPelanggan(e.target.value)}
+                        className="w-full p-1.5 border border-slate-300 rounded bg-white text-slate-900 outline-none focus:ring-1 focus:ring-blue-500"
+                        placeholder="Umum / Nama"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-amber-800 pt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={isKasbon}
+                      onChange={(e) => setIsKasbon(e.target.checked)}
+                      className="rounded text-amber-600 focus:ring-amber-500"
+                    />
+                    Tandai Sebagai Kasbon / Hutang
+                  </label>
+                </div>
+
                 <div>
                   <label className="text-xs font-semibold text-slate-700 block mb-1">Metode Pembayaran</label>
                   <div className="grid grid-cols-2 gap-1.5">
@@ -747,9 +881,23 @@ export default function POSPage() {
                   </div>
                 </div>
 
-                <div className="flex justify-between text-base font-bold">
-                  <span className="text-slate-900">Total:</span>
-                  <span className="text-blue-600">Rp {totalHarga.toLocaleString('id-ID')}</span>
+                <div className="space-y-0.5 pt-1">
+                  {diskon > 0 && (
+                    <div className="flex justify-between text-xs text-slate-500">
+                      <span>Subtotal:</span>
+                      <span>Rp {subtotalBelanja.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+                  {diskon > 0 && (
+                    <div className="flex justify-between text-xs text-red-600 font-semibold">
+                      <span>Diskon:</span>
+                      <span>- Rp {diskon.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-base font-bold text-slate-900">
+                    <span>Total Tagihan:</span>
+                    <span className="text-blue-600">Rp {totalHarga.toLocaleString('id-ID')}</span>
+                  </div>
                 </div>
 
                 <div>
@@ -787,10 +935,12 @@ export default function POSPage() {
                   )}
                 </div>
 
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-600">Kembalian:</span>
-                  <span className="font-semibold text-slate-900">Rp {kembalian.toLocaleString('id-ID')}</span>
-                </div>
+                {!isKasbon && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-600">Kembalian:</span>
+                    <span className="font-semibold text-slate-900">Rp {kembalian.toLocaleString('id-ID')}</span>
+                  </div>
+                )}
 
                 <button
                   onClick={handleCheckout}
@@ -798,10 +948,12 @@ export default function POSPage() {
                   className={`w-full py-2.5 rounded-lg font-bold transition ${
                     cart.length === 0
                       ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                      : isKasbon
+                      ? 'bg-amber-600 text-white hover:bg-amber-700'
                       : 'bg-green-600 text-white hover:bg-green-700'
                   }`}
                 >
-                  Bayar Sekarang
+                  {isKasbon ? 'Simpan Transaksi Kasbon' : 'Bayar Sekarang'}
                 </button>
               </div>
             </div>
@@ -909,33 +1061,54 @@ export default function POSPage() {
                 <p className="text-sm text-slate-500">Laporan omzet dan riwayat transaksi usaha ini</p>
               </div>
 
-              {/* FILTER TANGGAL */}
-              <div className="flex items-center gap-1.5 bg-white border border-slate-200 p-1 rounded-xl text-xs font-semibold">
-                <Calendar size={14} className="text-slate-400 ml-2" />
+              <div className="flex flex-wrap items-center gap-2">
+                {/* TOMBOL KELOLA KASBON */}
                 <button
-                  onClick={() => setDateFilter('all')}
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    dateFilter === 'all' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-                  }`}
+                  onClick={() => {
+                    if (activeStore) fetchDebts(activeStore.id);
+                    setShowDebtModal(true);
+                  }}
+                  className="flex items-center gap-1.5 bg-amber-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-amber-700 transition shadow-sm"
                 >
-                  Semua
+                  <Receipt size={15} /> Kelola Kasbon ({debts.length})
                 </button>
+
+                {/* TOMBOL EXPORT EXCEL */}
                 <button
-                  onClick={() => setDateFilter('today')}
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    dateFilter === 'today' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-                  }`}
+                  onClick={handleExportExcel}
+                  className="flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-green-700 transition shadow-sm"
                 >
-                  Hari Ini
+                  <FileSpreadsheet size={15} /> Export Excel (.xlsx)
                 </button>
-                <button
-                  onClick={() => setDateFilter('week')}
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    dateFilter === 'week' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-                  }`}
-                >
-                  7 Hari Terakhir
-                </button>
+
+                {/* FILTER TANGGAL */}
+                <div className="flex items-center gap-1.5 bg-white border border-slate-200 p-1 rounded-xl text-xs font-semibold">
+                  <Calendar size={14} className="text-slate-400 ml-2" />
+                  <button
+                    onClick={() => setDateFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg transition ${
+                      dateFilter === 'all' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Semua
+                  </button>
+                  <button
+                    onClick={() => setDateFilter('today')}
+                    className={`px-3 py-1.5 rounded-lg transition ${
+                      dateFilter === 'today' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Hari Ini
+                  </button>
+                  <button
+                    onClick={() => setDateFilter('week')}
+                    className={`px-3 py-1.5 rounded-lg transition ${
+                      dateFilter === 'week' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    7 Hari Terakhir
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -961,10 +1134,10 @@ export default function POSPage() {
                   <thead className="bg-slate-50 text-slate-500 border-b">
                     <tr>
                       <th className="p-3">Tanggal / Waktu</th>
-                      <th className="p-3">Metode</th>
+                      <th className="p-3">Pelanggan</th>
+                      <th className="p-3">Status / Metode</th>
                       <th className="p-3">Total Transaksi</th>
                       <th className="p-3">Bayar</th>
-                      <th className="p-3">Kembalian</th>
                       <th className="p-3 text-right">Aksi</th>
                     </tr>
                   </thead>
@@ -973,9 +1146,9 @@ export default function POSPage() {
                       [1, 2, 3].map((i) => (
                         <tr key={i} className="animate-pulse">
                           <td className="p-3"><div className="h-4 bg-slate-200 rounded w-32"></div></td>
-                          <td className="p-3"><div className="h-4 bg-slate-200 rounded w-16"></div></td>
-                          <td className="p-3"><div className="h-4 bg-slate-200 rounded w-24"></div></td>
                           <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
+                          <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
+                          <td className="p-3"><div className="h-4 bg-slate-200 rounded w-24"></div></td>
                           <td className="p-3"><div className="h-4 bg-slate-200 rounded w-20"></div></td>
                           <td className="p-3 text-right"><div className="h-4 bg-slate-200 rounded w-12 ml-auto"></div></td>
                         </tr>
@@ -988,14 +1161,18 @@ export default function POSPage() {
                           className="hover:bg-slate-50 cursor-pointer transition"
                         >
                           <td className="p-3">{new Date(tx.created_at).toLocaleString('id-ID')}</td>
-                          <td className="p-3 font-medium">
+                          <td className="p-3 font-semibold text-slate-800">{tx.nama_pelanggan || 'Umum'}</td>
+                          <td className="p-3 font-medium space-x-1">
                             <span
                               className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                tx.metode_pembayaran === 'QRIS / Non-Tunai'
-                                  ? 'bg-purple-100 text-purple-700'
+                                tx.status_pembayaran === 'Belum Lunas'
+                                  ? 'bg-red-100 text-red-700'
                                   : 'bg-green-100 text-green-700'
                               }`}
                             >
+                              {tx.status_pembayaran || 'Lunas'}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-xs font-bold bg-slate-100 text-slate-700">
                               {tx.metode_pembayaran || 'Tunai'}
                             </span>
                           </td>
@@ -1003,7 +1180,6 @@ export default function POSPage() {
                             Rp {Number(tx.total_harga).toLocaleString('id-ID')}
                           </td>
                           <td className="p-3">Rp {Number(tx.bayar).toLocaleString('id-ID')}</td>
-                          <td className="p-3">Rp {Number(tx.kembalian).toLocaleString('id-ID')}</td>
                           <td className="p-3 text-right space-x-1">
                             <button
                               onClick={(e) => {
@@ -1033,7 +1209,131 @@ export default function POSPage() {
         )}
       </main>
 
-      {/* MODAL RINCIAN ITEM TRANSAKSI & CETAK ULANG */}
+      {/* MODAL KELOLA & PELUNASAN KASBON / PIUTANG */}
+      {showDebtModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 print:hidden">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg text-slate-900 shadow-2xl">
+            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">Daftar Kasbon / Piutang Pelanggan</h3>
+                <p className="text-xs text-slate-500">Kelola dan catat pelunasan hutang pelanggan</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowDebtModal(false);
+                  setSelectedDebt(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {selectedDebt ? (
+              /* FORM INPUT PELUNASAN KASBON */
+              <form onSubmit={handlePayDebt} className="space-y-4">
+                <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs space-y-1">
+                  <p className="font-bold text-amber-900 text-sm">{selectedDebt.nama_pelanggan}</p>
+                  <p className="text-slate-600">
+                    Sisa Hutang:{' '}
+                    <span className="font-bold text-red-600">
+                      Rp {Number(selectedDebt.sisa_hutang).toLocaleString('id-ID')}
+                    </span>
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Nominal Pembayaran (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    max={Number(selectedDebt.sisa_hutang)}
+                    value={jumlahBayarKasbon || ''}
+                    onChange={(e) => setJumlahBayarKasbon(Number(e.target.value))}
+                    className="w-full p-2.5 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-900"
+                    placeholder="0"
+                  />
+                  <div className="flex gap-1.5 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setJumlahBayarKasbon(Number(selectedDebt.sisa_hutang))}
+                      className="text-[10px] font-bold px-2 py-1 bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700 rounded transition"
+                    >
+                      Bayar Lunas
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDebt(null)}
+                    className="px-4 py-2 border border-slate-300 rounded-xl text-slate-700 text-xs font-semibold hover:bg-slate-50"
+                  >
+                    Kembali
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-green-600 text-white rounded-xl text-xs font-bold hover:bg-green-700 transition"
+                  >
+                    Simpan Pembayaran
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* TABEL DAFTAR KASBON AKTIF */
+              <div className="space-y-3">
+                {debts.length === 0 ? (
+                  <div className="text-center py-8 text-slate-400 text-xs">
+                    Tidak ada catatan kasbon yang belum lunas.
+                  </div>
+                ) : (
+                  <div className="max-h-64 overflow-y-auto space-y-2">
+                    {debts.map((debt) => (
+                      <div
+                        key={debt.id}
+                        className="flex justify-between items-center p-3 border border-slate-200 rounded-xl hover:bg-slate-50 transition"
+                      >
+                        <div>
+                          <p className="font-bold text-slate-900 text-sm">{debt.nama_pelanggan}</p>
+                          <p className="text-[10px] text-slate-500">
+                            Sisa Hutang:{' '}
+                            <span className="font-bold text-red-600">
+                              Rp {Number(debt.sisa_hutang).toLocaleString('id-ID')}
+                            </span>
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSelectedDebt(debt);
+                            setJumlahBayarKasbon(Number(debt.sisa_hutang));
+                          }}
+                          className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition"
+                        >
+                          Bayar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-slate-100 flex justify-end">
+                  <button
+                    onClick={() => setShowDebtModal(false)}
+                    className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition"
+                  >
+                    Tutup
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL RINCIAN ITEM TRANSAKSI */}
       {showTxDetailModal && selectedTx && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 print:hidden">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md text-slate-900 shadow-2xl">
@@ -1070,9 +1370,29 @@ export default function POSPage() {
 
             <div className="space-y-1.5 text-xs">
               <div className="flex justify-between text-slate-600">
+                <span>Pelanggan</span>
+                <span className="font-bold text-slate-900">{selectedTx.nama_pelanggan || 'Umum'}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Status Pembayaran</span>
+                <span
+                  className={`font-bold ${
+                    selectedTx.status_pembayaran === 'Belum Lunas' ? 'text-red-600' : 'text-green-600'
+                  }`}
+                >
+                  {selectedTx.status_pembayaran || 'Lunas'}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-600">
                 <span>Metode Pembayaran</span>
                 <span className="font-bold text-slate-900">{selectedTx.metode_pembayaran || 'Tunai'}</span>
               </div>
+              {Number(selectedTx.diskon || 0) > 0 && (
+                <div className="flex justify-between text-red-600">
+                  <span>Potongan Diskon</span>
+                  <span>- Rp {Number(selectedTx.diskon).toLocaleString('id-ID')}</span>
+                </div>
+              )}
               <div className="flex justify-between font-bold text-sm text-slate-900 pt-1">
                 <span>Total Belanja</span>
                 <span className="text-blue-600">Rp {Number(selectedTx.total_harga).toLocaleString('id-ID')}</span>
@@ -1201,6 +1521,17 @@ export default function POSPage() {
                 )}
               </div>
 
+              <div className="space-y-1 mb-2 border-b border-dashed border-slate-300 pb-2 text-[10px] text-slate-600">
+                <div className="flex justify-between">
+                  <span>Pelanggan:</span>
+                  <span className="font-bold text-slate-800">{receipt.namaPelanggan || 'Umum'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Status:</span>
+                  <span className="font-bold text-slate-800">{receipt.statusPembayaran || 'Lunas'}</span>
+                </div>
+              </div>
+
               <div className="space-y-2 border-b border-dashed border-slate-300 pb-3 mb-3">
                 {receipt.items.map((item) => (
                   <div key={item.product_id} className="flex justify-between items-start">
@@ -1218,6 +1549,18 @@ export default function POSPage() {
               </div>
 
               <div className="space-y-1 text-xs">
+                {receipt.diskon > 0 && (
+                  <div className="flex justify-between text-slate-600">
+                    <span>SUBTOTAL</span>
+                    <span>Rp {receipt.subtotalBelanja.toLocaleString('id-ID')}</span>
+                  </div>
+                )}
+                {receipt.diskon > 0 && (
+                  <div className="flex justify-between text-red-600 font-semibold">
+                    <span>DISKON</span>
+                    <span>- Rp {receipt.diskon.toLocaleString('id-ID')}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-slate-600">
                   <span>METODE</span>
                   <span className="font-semibold text-slate-900">{receipt.metodePembayaran}</span>
