@@ -130,6 +130,15 @@ interface TransactionDetailItem {
   subtotal: number;
 }
 
+// 1. Deklarasi Interface Customer Loyal
+interface Customer {
+  id: string;
+  nama: string;
+  no_telepon?: string;
+  poin: number;
+  total_belanja: number;
+}
+
 function useLocalStorage<T>(key: string): T | null {
   const store = useSyncExternalStore(
     (callback) => {
@@ -199,6 +208,13 @@ export default function POSPage() {
   const [txDetails, setTxDetails] = useState<TransactionDetailItem[]>([]);
   const [showTxDetailModal, setShowTxDetailModal] = useState(false);
 
+  // 2. Di dalam komponen POSPage(), tambahkan state berikut: Customer Loyality
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
+  const [newCustNama, setNewCustNama] = useState('');
+  const [newCustPhone, setNewCustPhone] = useState('');
+
   const router = useRouter();
 
   const fetchProducts = useCallback(async (storeId: string) => {
@@ -250,6 +266,16 @@ export default function POSPage() {
     }
   }, []);
 
+  // 3. Fungsi Fetch Customers
+  const fetchCustomers = useCallback(async (storeId: string) => {
+    try {
+      const { data } = await API.get<Customer[]>(`/customers/store/${storeId}`);
+      setCustomers(data);
+    } catch (err) {
+      console.error('Gagal mengambil data pelanggan', err);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeStore === null) {
       const timer = setTimeout(() => {
@@ -278,6 +304,16 @@ export default function POSPage() {
       return () => clearTimeout(timer);
     }
   }, [activeStore, activeTab, trendRange, fetchAnalyticsData]);
+
+  // 4. Panggil fetchCustomers di useEffect awal saat activeStore dimuat
+  useEffect(() => {
+    if (activeStore) {
+      const timer = setTimeout(() => {
+        fetchCustomers(activeStore.id);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [activeStore, fetchCustomers]);
 
   const confirmNavigationWithCart = (): boolean => {
     if (cart.length > 0) {
@@ -448,17 +484,29 @@ export default function POSPage() {
   const handleCheckout = async () => {
     if (!activeStore) return;
     if (cart.length === 0) return alert('Keranjang masih kosong!');
-    if (!isKasbon && bayar < totalHarga) return alert('Uang pembayaran kurang!');
-    if (isKasbon && !namaPelanggan.trim()) return alert('Nama Pelanggan wajib diisi untuk transaksi Kasbon/Hutang!');
+
+    // Pastikan konversi Tipe Data Number secara eksplisit
+    const currentBayar = Number(bayar || 0);
+    const currentTotal = Number(totalHarga || 0);
+
+    if (!isKasbon && currentBayar < currentTotal) {
+      return alert(`Uang pembayaran kurang! Total: Rp ${currentTotal.toLocaleString('id-ID')}, Bayar: Rp ${currentBayar.toLocaleString('id-ID')}`);
+    }
+    if (isKasbon && !namaPelanggan.trim()) {
+      return alert('Nama Pelanggan wajib diisi untuk transaksi Kasbon/Hutang!');
+    }
 
     try {
       const statusPembayaran = isKasbon ? 'Belum Lunas' : 'Lunas';
+      const customerIdToSend = selectedCustomer ? selectedCustomer.id : null;
+
       const { data } = await API.post('/transactions', {
         store_id: activeStore.id,
-        total_harga: totalHarga,
-        diskon,
-        bayar,
-        kembalian: isKasbon ? 0 : kembalian,
+        customer_id: customerIdToSend,
+        total_harga: currentTotal,
+        diskon: Number(diskon || 0),
+        bayar: currentBayar,
+        kembalian: isKasbon ? 0 : (currentBayar >= currentTotal ? currentBayar - currentTotal : 0),
         metode_pembayaran: metodePembayaran,
         nama_pelanggan: namaPelanggan.trim() || 'Umum',
         status_pembayaran: statusPembayaran,
@@ -472,11 +520,11 @@ export default function POSPage() {
         storeAddress: activeStore.alamat,
         storePhone: activeStore.no_telepon,
         items: [...cart],
-        subtotalBelanja,
-        diskon,
-        totalHarga,
-        bayar,
-        kembalian: isKasbon ? 0 : kembalian,
+        subtotalBelanja: Number(subtotalBelanja || 0),
+        diskon: Number(diskon || 0),
+        totalHarga: currentTotal,
+        bayar: currentBayar,
+        kembalian: isKasbon ? 0 : (currentBayar >= currentTotal ? currentBayar - currentTotal : 0),
         metodePembayaran,
         namaPelanggan: namaPelanggan.trim() || 'Umum',
         statusPembayaran,
@@ -487,13 +535,22 @@ export default function POSPage() {
       setBayar(0);
       setDiskon(0);
       setNamaPelanggan('');
+      setSelectedCustomer(null);
       setIsKasbon(false);
       setMetodePembayaran('Tunai');
+
       fetchProducts(activeStore.id);
       fetchDashboardData(activeStore.id);
       fetchDebts(activeStore.id);
-    } catch {
-      alert('Transaksi Gagal disimpan');
+      fetchCustomers(activeStore.id);
+    } catch (err: unknown) {
+      console.error('Checkout error:', err);
+      if (typeof err === 'object' && err !== null && 'response' in err) {
+        const responseErr = (err as { response?: { data?: { error?: string } } }).response?.data?.error;
+        alert(responseErr || 'Transaksi Gagal disimpan');
+      } else {
+        alert('Transaksi Gagal disimpan');
+      }
     }
   };
 
@@ -609,6 +666,28 @@ export default function POSPage() {
     }
     return true;
   });
+
+  // 5. Handler Tambah Pelanggan Baru
+  const handleCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeStore || !newCustNama.trim()) return;
+    try {
+      const { data } = await API.post('/customers', {
+        store_id: activeStore.id,
+        nama: newCustNama.trim(),
+        no_telepon: newCustPhone.trim(),
+      });
+      alert('Pelanggan berhasil ditambahkan!');
+      setNewCustNama('');
+      setNewCustPhone('');
+      setShowAddCustomerModal(false);
+      fetchCustomers(activeStore.id);
+      setSelectedCustomer(data);
+      setNamaPelanggan(data.nama);
+    } catch {
+      alert('Gagal menambah pelanggan');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-100 flex text-slate-900">
@@ -885,16 +964,42 @@ export default function POSPage() {
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1 mb-0.5">
-                        <UserCheck size={10} /> Pelanggan
-                      </label>
-                      <input
-                        type="text"
-                        value={namaPelanggan}
-                        onChange={(e) => setNamaPelanggan(e.target.value)}
-                        className="w-full p-1.5 border border-slate-300 rounded bg-white text-slate-900 outline-none focus:ring-1 focus:ring-blue-500"
-                        placeholder="Umum / Nama"
-                      />
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1">
+                          <UserCheck size={10} /> Pelanggan / Member
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowAddCustomerModal(true)}
+                          className="text-[9px] text-blue-600 font-bold hover:underline"
+                        >
+                          + Tambah
+                        </button>
+                      </div>
+                      <select
+                        value={selectedCustomer?.id || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val) {
+                            const cust = customers.find((c) => c.id === val);
+                            if (cust) {
+                              setSelectedCustomer(cust);
+                              setNamaPelanggan(cust.nama);
+                            }
+                          } else {
+                            setSelectedCustomer(null);
+                            setNamaPelanggan('');
+                          }
+                        }}
+                        className="w-full p-1.5 border border-slate-300 rounded bg-white text-slate-900 text-xs font-semibold outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <option value="">Pelanggan Umum (Non-Member)</option>
+                        {customers.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.nama} ({c.poin} Poin)
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
@@ -1769,6 +1874,58 @@ export default function POSPage() {
           </div>
         </div>
       )}
+
+      {/* MODAL TAMBAH PELANGGAN BARU */}
+      {showAddCustomerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-slate-900 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b pb-2">
+              <h3 className="font-bold text-base">Tambah Member Pelanggan</h3>
+              <button onClick={() => setShowAddCustomerModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateCustomer} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Nama Lengkap</label>
+                <input
+                  type="text"
+                  required
+                  value={newCustNama}
+                  onChange={(e) => setNewCustNama(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded-lg text-xs"
+                  placeholder="Contoh: Budi Santoso"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">No. WhatsApp / Telepon</label>
+                <input
+                  type="text"
+                  value={newCustPhone}
+                  onChange={(e) => setNewCustPhone(e.target.value)}
+                  className="w-full p-2 border border-slate-300 rounded-lg text-xs"
+                  placeholder="08123456789"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddCustomerModal(false)}
+                  className="px-3 py-1.5 border rounded-lg text-xs"
+                >
+                  Batal
+                </button>
+                <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold">
+                  Simpan Pelanggan
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
